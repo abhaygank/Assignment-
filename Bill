@@ -1,0 +1,121 @@
+const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const bodyParser = require('body-parser');
+
+const app = express();
+const PORT = 3000;
+
+app.use(bodyParser.json());
+
+
+const paymentQueue = [];
+const priorityQueue = [];
+const transactionStack = [];
+
+
+const dataDir = path.join(__dirname, 'data');
+const transactionFile = path.join(dataDir, 'transactions.json');
+const logFile = path.join(dataDir, 'dailyLogs.json');
+
+
+if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir);
+}
+
+
+const saveToFile = async (filePath, data) => {
+    await fs.promises.writeFile(filePath, JSON.stringify(data, null, 2));
+};
+
+
+
+
+app.post('/api/bills/add', async (req, res) => {
+    const { userId, type, amount, urgent } = req.body;
+
+    if (!userId || !type || !amount) {
+        return res.status(400).send({ message: 'Missing required fields' });
+    }
+
+    const request = { userId, type, amount, date: new Date().toISOString() };
+
+    if (urgent) {
+        priorityQueue.push(request); // Add to priority queue
+    } else {
+        paymentQueue.push(request); // Add to normal queue
+    }
+
+    res.status(201).send({ message: 'Payment request added', request });
+});
+
+
+app.post('/api/bills/process', async (req, res) => {
+    let request;
+
+    
+    if (priorityQueue.length > 0) {
+        request = priorityQueue.shift();
+    } else if (paymentQueue.length > 0) {
+        request = paymentQueue.shift();
+    } else {
+        return res.status(400).send({ message: 'No pending payment requests' });
+    }
+
+    
+    const transaction = { ...request, status: 'Completed' };
+    transactionStack.push(transaction);
+
+    
+    let transactions = [];
+    if (fs.existsSync(transactionFile)) {
+        transactions = JSON.parse(await fs.promises.readFile(transactionFile));
+    }
+    transactions.push(transaction);
+    await saveToFile(transactionFile, transactions);
+
+
+    const logEntry = { date: new Date().toISOString(), transaction };
+    let logs = [];
+    if (fs.existsSync(logFile)) {
+        logs = JSON.parse(await fs.promises.readFile(logFile));
+    }
+    logs.push(logEntry);
+    await saveToFile(logFile, logs);
+
+    res.status(200).send({ message: 'Payment processed successfully', transaction });
+});
+
+
+app.post('/api/bills/undo', (req, res) => {
+    if (transactionStack.length === 0) {
+        return res.status(400).send({ message: 'No transactions to undo' });
+    }
+
+    const lastTransaction = transactionStack.pop();
+    res.status(200).send({ message: 'Last transaction undone', lastTransaction });
+});
+
+
+app.get('/api/bills/transactions', async (req, res) => {
+    if (!fs.existsSync(transactionFile)) {
+        return res.status(404).send({ message: 'No transactions found' });
+    }
+
+    const transactions = JSON.parse(await fs.promises.readFile(transactionFile));
+    res.status(200).send(transactions);
+});
+
+
+app.get('/api/bills/logs', async (req, res) => {
+    if (!fs.existsSync(logFile)) {
+        return res.status(404).send({ message: 'No logs found' });
+    }
+
+    const logs = JSON.parse(await fs.promises.readFile(logFile));
+    res.status(200).send(logs);
+});
+
+app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+});
